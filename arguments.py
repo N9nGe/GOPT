@@ -9,16 +9,20 @@ from omegaconf import OmegaConf
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default="cfg/config.yaml")
-    parser.add_argument('--ckp', type=str, default=None, 
+    parser.add_argument('--ckp', type=str, default=None,
                         help="Path to the model to be tested")
+    parser.add_argument('--resume', type=str, default=None,
+                        help="Path to existing log directory to resume training from")
     parser.add_argument('--no-cuda', action='store_true',
                         help='Cuda will be enabled by default')
-    parser.add_argument('--device', type=int, default=0, 
+    parser.add_argument('--device', type=int, default=0,
                         help='Which GPU will be called')
-    parser.add_argument('--test-episode', type=int, default=1000, 
+    parser.add_argument('--test-episode', type=int, default=1000,
                         help='Number of episodes for evaluation')
     parser.add_argument('--render', action='store_true',
                         help='Render the environment while testing')
+    parser.add_argument('--render-seed', type=int, default=5,
+                        help='Random seed for rendering (determines which episode to visualize)')
     
     args = parser.parse_args()
 

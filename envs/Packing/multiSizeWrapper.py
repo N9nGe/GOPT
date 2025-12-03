@@ -9,6 +9,25 @@ from gymnasium import spaces
 from .container import Container
 
 
+# ======== Global state for bin size curriculum ========
+_GLOBAL_ACTIVE_BIN_SIZES = None
+
+def set_global_active_bin_sizes(active_bins):
+    """
+    Set global active bin sizes for curriculum learning.
+    All MultiSizeWrapper instances will only sample from these bins.
+
+    Args:
+        active_bins: List of bin sizes that should be active, or None for all bins
+    """
+    global _GLOBAL_ACTIVE_BIN_SIZES
+    _GLOBAL_ACTIVE_BIN_SIZES = active_bins
+
+def get_global_active_bin_sizes():
+    """Get current global active bin sizes (None means all bins active)"""
+    return _GLOBAL_ACTIVE_BIN_SIZES
+
+
 class MultiSizeWrapper(gym.Wrapper):
     """
     Wrapper that randomly changes bin size on each reset.
@@ -66,9 +85,23 @@ class MultiSizeWrapper(gym.Wrapper):
         Reset environment with a randomly selected bin size.
         Pads observation to max size.
         """
-        # Randomly select bin size
-        idx = np.random.randint(len(self.bin_sizes))
-        self.current_bin_size = self.bin_sizes[idx]
+        # Get active bins (for curriculum learning)
+        global_active_bins = get_global_active_bin_sizes()
+
+        if global_active_bins is not None:
+            # Bin size curriculum active: only select from active bins
+            # Filter self.bin_sizes to only include those in global_active_bins
+            active_bins = [b for b in self.bin_sizes if b in global_active_bins]
+            if len(active_bins) == 0:
+                # Fallback: if no overlap, use first global active bin
+                active_bins = [global_active_bins[0]]
+        else:
+            # No curriculum: use all bins
+            active_bins = self.bin_sizes
+
+        # Randomly select bin size from active bins
+        idx = np.random.randint(len(active_bins))
+        self.current_bin_size = active_bins[idx]
 
         # Update environment's bin size and area
         # Use unwrapped to access the actual PackingEnv instance

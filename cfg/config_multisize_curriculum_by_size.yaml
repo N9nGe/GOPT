@@ -1,10 +1,10 @@
-# Configuration for combined multi-size + curriculum learning (Objectives 2 & 3)
-# Trains on multiple bin sizes (cubic + non-cubic) with curriculum-based difficulty progression
-# Cubic: 10x10x10, 20x20x20, 30x30x30, 50x50x50
-# Non-cubic: 10x15x12, 20x25x30, 25x35x30, 40x45x50
+# Configuration for bin size curriculum learning (Ablation Study)
+# Progressively introduces larger container sizes during training
+# Uses 3 cubic bins: 10x10x10, 12x12x12, 15x15x15
+# Also includes box difficulty curriculum (large boxes -> small boxes)
 
 # Custom run name (optional - comment out to use auto-generated name)
-run_name: multisize_curriculum_v2_3bins_cubic_700
+run_name: multisize_curriculum_by_size_3bins_cubic
 
 seed: 5
 cuda_deterministic: True
@@ -17,14 +17,14 @@ env:
   box_type: curriculum          # Use curriculum-based box generation
   container_size: [10, 10, 10]  # IGNORED when bin_sizes is set (only used for box generation range)
   bin_sizes: [[10, 10, 10], [12, 12, 12], [15, 15, 15]]  # ACTUAL training sizes: 3 cubic bins
-  step: 5                       # Box size step (based on max bin size: 20)
+  step: 5                       # Box size step (based on max bin size: 15)
   k_placement: 80              # number of candidate placements
 
 
 train:
   algo: PPO
   clip_param: 0.3
-  num_processes: 48    # the number of subprogresses, if debug, set to 1
+  num_processes: 24    # the number of subprogresses, if debug, set to 1
   num_steps: 5
   epoch: 1000
   last_epoch: 200
@@ -35,17 +35,20 @@ train:
   reward_type:            # optional: "terminal", None
   gamma: 1                  # discount factor for rewards (default: 1)
 
-  # Box difficulty curriculum learning parameters
+  # Box difficulty curriculum learning parameters (controls box size distribution)
+  # This runs independently of bin size curriculum
   use_curriculum: True
   curriculum_initial: 0.2      # Start with easy episodes (large boxes)
   curriculum_final: 0.8        # End with hard episodes (small boxes)
-  curriculum_epochs: 700       # Curriculm epochs for 3 cubic bins
+  curriculum_epochs: 700       # Curriculum epochs for box difficulty
   curriculum_schedule: linear  # linear, exponential, or step
 
-  # Bin size curriculum learning parameters (ABLATION STUDY - disabled by default)
-  use_bin_curriculum: False    # Set to True to enable bin size curriculum
-  bin_curriculum_epochs: 700   # How many epochs to complete bin curriculum
-  bin_curriculum_schedule: linear  # linear, step, or all_at_once
+  # Bin size curriculum learning parameters (ABLATION STUDY)
+  # Controls progressive introduction of larger container sizes
+  # Strategy: Start with smallest bin (10x10x10), gradually add larger bins
+  use_bin_curriculum: True     # Enable bin size curriculum
+  bin_curriculum_epochs: 600   # How many epochs to complete bin curriculum
+  bin_curriculum_schedule: linear  # linear: gradual addition, step: discrete jumps, all_at_once: no curriculum
   bin_curriculum_sort: volume  # How to sort bins: volume or max_dim
 
 opt:  # optimizer

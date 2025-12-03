@@ -35,8 +35,8 @@ from tools import *
 from masked_ppo import MaskedPPOPolicy
 from masked_a2c import MaskedA2CPolicy
 from mycollector import PackCollector
-from envs.Packing.multiSizeWrapper import MultiSizeWrapper
-from curriculum import CurriculumScheduler
+from envs.Packing.multiSizeWrapper import MultiSizeWrapper, set_global_active_bin_sizes
+from curriculum import CurriculumScheduler, BinSizeCurriculumScheduler
 from envs.Packing.curriculumBoxCreator import CurriculumBoxCreator, set_global_difficulty
  
 
@@ -208,8 +208,16 @@ def train(args):
     else:
         raise NotImplementedError
 
-    log_path = './logs/' + time_str
-    
+    # Check if resuming from existing checkpoint
+    if args.get('resume') is not None:
+        log_path = args.resume
+        print(f"Resuming training from: {log_path}")
+        if not os.path.exists(log_path):
+            raise FileNotFoundError(f"Resume path does not exist: {log_path}")
+    else:
+        log_path = './logs/' + time_str
+        print(f"Starting new training run: {log_path}")
+
     is_debug = True if sys.gettrace() else False
     if not is_debug:
         writer = SummaryWriter(log_path)
@@ -218,10 +226,11 @@ def train(args):
             train_interval=args.log_interval,
             update_interval=args.log_interval
         )
-        # backup the config file, os.path.join(,)
-        shutil.copy(args.config, log_path)  # config file
-        shutil.copy("model.py", log_path)  # network
-        shutil.copy("arguments.py", log_path)  # network
+        # backup the config file (only for new runs)
+        if args.get('resume') is None:
+            shutil.copy(args.config, log_path)  # config file
+            shutil.copy("model.py", log_path)  # network
+            shutil.copy("arguments.py", log_path)  # network
     else:
         logger = LazyLogger()
 
@@ -236,14 +245,37 @@ def train(args):
             curriculum_epochs=args.train.get('curriculum_epochs', 400),
             schedule_type=args.train.get('curriculum_schedule', 'linear')
         )
-        print(f"\nCurriculum learning enabled!")
+        print(f"\nBox difficulty curriculum learning enabled!")
         print(f"  Schedule: {args.train.curriculum_schedule}")
         print(f"  Difficulty: {args.train.curriculum_initial:.2f} → {args.train.curriculum_final:.2f}")
         print(f"  Ramp-up epochs: {args.train.curriculum_epochs}\n")
 
+    # ======== Bin Size Curriculum Learning Setup (Ablation Study) =========
+    use_bin_curriculum = args.train.get('use_bin_curriculum', False)
+    bin_curriculum_scheduler = None
+
+    # Check if multi-size training is enabled
+    use_multi_size = args.env.get('bin_sizes') is not None
+
+    if use_bin_curriculum and use_multi_size:
+        bin_curriculum_scheduler = BinSizeCurriculumScheduler(
+            bin_sizes=args.env.bin_sizes,
+            curriculum_epochs=args.train.get('bin_curriculum_epochs', args.train.get('curriculum_epochs', 400)),
+            schedule_type=args.train.get('bin_curriculum_schedule', 'linear'),
+            sort_by=args.train.get('bin_curriculum_sort', 'volume')
+        )
+        print(f"\nBin size curriculum learning enabled!")
+        print(f"  Schedule: {args.train.get('bin_curriculum_schedule', 'linear')}")
+        print(f"  Bin sizes: {bin_curriculum_scheduler.sorted_bin_sizes}")
+        print(f"  Ramp-up epochs: {args.train.get('bin_curriculum_epochs', args.train.get('curriculum_epochs', 400))}\n")
+    elif use_bin_curriculum and not use_multi_size:
+        print("\nWARNING: Bin size curriculum enabled but multi-size training is not!")
+        print("  Bin curriculum will be disabled. Enable multi-size training (set 'bin_sizes' in config).\n")
+        use_bin_curriculum = False
+
     # ======== callback functions used during training =========
     def train_fn(epoch, env_step):
-        # Update curriculum difficulty if enabled
+        # Update box difficulty curriculum if enabled
         if use_curriculum and curriculum_scheduler is not None:
             target_difficulty = curriculum_scheduler.get_target_difficulty(epoch)
             set_global_difficulty(target_difficulty)
@@ -256,7 +288,24 @@ def train(args):
 
             # Print curriculum status every 50 epochs
             if epoch % 50 == 0:
-                print(f"Epoch {epoch}: Curriculum difficulty = {target_difficulty:.3f}")
+                print(f"Epoch {epoch}: Box difficulty = {target_difficulty:.3f}")
+
+        # Update bin size curriculum if enabled
+        if use_bin_curriculum and bin_curriculum_scheduler is not None:
+            active_bins = bin_curriculum_scheduler.get_active_bin_sizes(epoch)
+            set_global_active_bin_sizes(active_bins)
+
+            # Log bin curriculum info
+            if not is_debug and epoch % args.log_interval == 0:
+                info_dict = bin_curriculum_scheduler.get_info_dict()
+                for key, value in info_dict.items():
+                    writer.add_scalar(key, value, epoch)
+
+            # Print bin curriculum status every 50 epochs
+            if epoch % 50 == 0:
+                n_active = len(active_bins)
+                n_total = len(bin_curriculum_scheduler.sorted_bin_sizes)
+                print(f"Epoch {epoch}: Using {n_active}/{n_total} bin sizes: {active_bins}")
 
         # monitor leraning rate in tensorboard
         # writer.add_scalar('train/lr', optim.param_groups[0]["lr"], env_step)
@@ -296,6 +345,18 @@ def train(args):
         with open(os.path.join(log_path, f"{ratio:.4f}_{ratio_std:.4f}_{total}.txt"), "w") as file:
             file.write(str(train_info).replace("{", "").replace("}", "").replace(", ", "\n"))
 
+    # Load checkpoint if it exists (for resuming training)
+    checkpoint_path = os.path.join(log_path, "checkpoint.pth")
+    if os.path.exists(checkpoint_path):
+        print(f"Found existing checkpoint at {checkpoint_path}")
+        print("Loading checkpoint to resume training...")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        policy.load_state_dict(checkpoint["model"])
+        optim.load_state_dict(checkpoint["optim"])
+        print("Checkpoint loaded successfully! Training will resume from saved state.")
+    else:
+        print("No checkpoint found. Starting training from scratch.")
+
     buffer = VectorReplayBuffer(total_size=10000, buffer_num=len(train_envs))
     train_collector = PackCollector(policy, train_envs, buffer)
     test_collector = PackCollector(policy, test_envs)
@@ -315,6 +376,7 @@ def train(args):
         train_fn=train_fn,
         save_best_fn=save_best_fn,
         save_checkpoint_fn=save_checkpoint_fn,
+        resume_from_log=True,  # Enable resuming from checkpoint
         logger=logger,
         test_in_train=False
     )

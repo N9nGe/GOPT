@@ -13,18 +13,20 @@ class CurriculumBoxCreator(RandomBoxCreator):
     Box creator with curriculum learning support.
 
     Adjusts sampling distribution based on difficulty:
-    - Low difficulty (0.0-0.4): Prefer large boxes (easier packing)
+    - Low difficulty (0.0-0.4): Prefer large boxes RELATIVE TO BIN (easier packing)
     - Medium difficulty (0.4-0.6): Uniform distribution
-    - High difficulty (0.6-1.0): Prefer small boxes or uniform (harder packing)
+    - High difficulty (0.6-1.0): Prefer small boxes RELATIVE TO BIN (harder packing)
     """
 
-    def __init__(self, box_size_set=None):
+    def __init__(self, box_size_set=None, bin_size=None):
         """
         Args:
             box_size_set: List of available box sizes (tuples)
+            bin_size: Container size (optional, can be updated later for multi-size training)
         """
         super().__init__(box_size_set)
         self.difficulty = 0.5  # Default: medium difficulty
+        self.bin_size = bin_size  # Store container size for difficulty calculation
         self.weights = None  # Sampling weights
         self._update_weights()
 
@@ -32,7 +34,10 @@ class CurriculumBoxCreator(RandomBoxCreator):
         self.total_boxes_generated = 0
         self.difficulty_history = []
 
-        print(f"CurriculumBoxCreator initialized with {len(self.box_set)} box sizes")
+        if bin_size is not None:
+            print(f"CurriculumBoxCreator initialized with {len(self.box_set)} box sizes, bin_size={bin_size}")
+        else:
+            print(f"CurriculumBoxCreator initialized with {len(self.box_set)} box sizes (bin-agnostic mode)")
 
     def set_difficulty(self, difficulty: float):
         """
@@ -40,16 +45,27 @@ class CurriculumBoxCreator(RandomBoxCreator):
 
         Args:
             difficulty: Target difficulty in [0.0, 1.0]
-                       0.0 = easiest (large boxes)
-                       1.0 = hardest (small boxes)
+                       0.0 = easiest (large boxes relative to bin)
+                       1.0 = hardest (small boxes relative to bin)
         """
         self.difficulty = np.clip(difficulty, 0.0, 1.0)
         self._update_weights()
         self.difficulty_history.append(self.difficulty)
 
+    def set_bin_size(self, bin_size):
+        """
+        Update bin size and recalculate weights.
+        Useful for multi-size training where container size changes.
+
+        Args:
+            bin_size: New container size (tuple)
+        """
+        self.bin_size = bin_size
+        self._update_weights()
+
     def _update_weights(self):
-        """Update sampling weights based on current difficulty"""
-        self.weights = difficulty_to_box_size_bias(self.difficulty, self.box_set)
+        """Update sampling weights based on current difficulty and bin size"""
+        self.weights = difficulty_to_box_size_bias(self.difficulty, self.box_set, self.bin_size)
 
     def generate_box_size(self, **kwargs):
         """
@@ -110,8 +126,8 @@ class GlobalCurriculumBoxCreator(CurriculumBoxCreator):
     Useful for parallel environments in SubprocVectorEnv.
     """
 
-    def __init__(self, box_size_set=None):
-        super().__init__(box_size_set)
+    def __init__(self, box_size_set=None, bin_size=None):
+        super().__init__(box_size_set, bin_size)
         print("GlobalCurriculumBoxCreator: Will read difficulty from global state")
 
     def generate_box_size(self, **kwargs):

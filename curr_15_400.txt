@@ -1,0 +1,74 @@
+=================================
+Evaluation Results
+=================================
+Checkpoint: /home/alex/Documents/GOPT/logs/curriculum_15x15x15_2025.11.26-12-02-15/policy_step_best.pth
+Date: Thu Nov 27 09:30:07 PM PST 2025
+=================================
+
+-----------------------------------
+Testing on: 10x10x10
+-----------------------------------
+  Space Utilization: 0.7106
+  Items Packed:      27.6930
+  Std Deviation:     0.0849
+
+-----------------------------------
+Testing on: 30x30x30
+-----------------------------------
+  Space Utilization: 0.7220
+  Items Packed:      28.1060
+  Std Deviation:     0.0811
+
+-----------------------------------
+Testing on: 50x50x50
+-----------------------------------
+  Space Utilization: 0.7224
+  Items Packed:      28.1060
+  Std Deviation:     0.0826
+
+-----------------------------------
+Testing on: 100x100x100
+-----------------------------------
+  Space Utilization: 0.7224
+  Items Packed:      28.1060
+  Std Deviation:     0.0826
+
+-----------------------------------
+Testing on: noncubic_5x8x10
+-----------------------------------
+  Space Utilization: 0.4844
+  Items Packed:      8.2100
+  Std Deviation:     0.1893
+
+-----------------------------------
+Testing on: noncubic_8x18x15
+-----------------------------------
+  Space Utilization: 0.4019
+  Items Packed:      8.0750
+  Std Deviation:     0.1577
+
+-----------------------------------
+Testing on: noncubic_12x15x20
+-----------------------------------
+  Space Utilization: 0.4508
+  Items Packed:      8.5880
+  Std Deviation:     0.1491
+
+-----------------------------------
+Testing on: noncubic_15x25x30
+-----------------------------------
+  Space Utilization: 0.4659
+  Items Packed:      8.2410
+  Std Deviation:     0.1839
+
+-----------------------------------
+Testing on: noncubic_20x35x40
+-----------------------------------
+  Space Utilization: 0.4454
+  Items Packed:      8.2700
+  Std Deviation:     0.1717
+
+=================================
+Evaluation Complete!
+Results saved to: curr_15_400.txt
+=================================

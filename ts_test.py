@@ -82,6 +82,14 @@ def test(args):
     print('average put item number: %.4f'%(result['num']))
     print("standard variance: %.4f"%(result['ratio_std']))
 
+    # Keep visualization window open until user closes it manually
+    if args.render:
+        print('\n' + '='*60)
+        print('Visualization complete!')
+        print('Close the visualization window to exit the program.')
+        print('='*60)
+        test_env.renderer.hold_on()
+
 
 if __name__ == '__main__':
     registration_envs()
@@ -91,7 +99,10 @@ if __name__ == '__main__':
 
     if args.render:
         args.test_episode = 1  # for visualization
+        args.seed = args.render_seed  # Use specified render seed
+        print(f"Rendering episode with seed: {args.seed}")
+    else:
+        args.seed = 5  # Default seed for non-render evaluation
 
-    args.seed = 5
     print(f"dimension: {args.env.container_size}")
     test(args)

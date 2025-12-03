@@ -55,7 +55,7 @@ class PackingEnv(gym.Env):
                 self.box_creator = CuttingBoxCreator(container_size, low, self.can_rotate)
             elif data_type == "curriculum":
                 print(f"using curriculum-based box generation")
-                self.box_creator = CurriculumBoxCreator(item_set)
+                self.box_creator = CurriculumBoxCreator(item_set, bin_size=container_size)
             else:
                 print(f"Unknown data_type '{data_type}', defaulting to random")
                 self.box_creator = RandomBoxCreator(item_set)
@@ -211,6 +211,10 @@ class PackingEnv(gym.Env):
 
         # Create new container with current bin_size and rotation setting
         self.container = Container(*self.bin_size, rotation=self.can_rotate)
+
+        # Update box creator's bin size for curriculum learning (multi-size support)
+        if isinstance(self.box_creator, CurriculumBoxCreator):
+            self.box_creator.set_bin_size(self.bin_size)
 
         # Recreate candidates array with correct shape for current bin_size
         if self.action_scheme == "EMS":

@@ -94,6 +94,106 @@ class CurriculumScheduler:
         }
 
 
+class BinSizeCurriculumScheduler:
+    """
+    Manages bin size curriculum learning.
+    Progressively introduces larger container sizes during training.
+
+    Strategy: Start with smallest bin(s), gradually add larger bins over time.
+    This is independent of box difficulty curriculum.
+    """
+
+    def __init__(self,
+                 bin_sizes: List[List[int]],
+                 curriculum_epochs: int = 400,
+                 schedule_type: str = 'linear',
+                 sort_by: str = 'volume'):
+        """
+        Args:
+            bin_sizes: List of bin sizes (will be sorted small to large)
+            curriculum_epochs: Number of epochs to complete curriculum
+            schedule_type: 'linear', 'step', or 'all_at_once'
+            sort_by: 'volume' or 'max_dim' - how to sort bin sizes
+        """
+        self.all_bin_sizes = bin_sizes
+        self.curriculum_epochs = curriculum_epochs
+        self.schedule_type = schedule_type
+        self.current_epoch = 0
+
+        # Sort bin sizes from smallest to largest
+        if sort_by == 'volume':
+            self.sorted_bin_sizes = sorted(bin_sizes, key=lambda b: b[0] * b[1] * b[2])
+        else:  # max_dim
+            self.sorted_bin_sizes = sorted(bin_sizes, key=lambda b: max(b))
+
+        self.n_bins = len(self.sorted_bin_sizes)
+
+        print(f"Bin size curriculum scheduler initialized:")
+        print(f"  Total bin sizes: {self.n_bins}")
+        print(f"  Sorted bin sizes: {self.sorted_bin_sizes}")
+        print(f"  Curriculum epochs: {curriculum_epochs}")
+        print(f"  Schedule type: {schedule_type}")
+
+    def get_active_bin_sizes(self, epoch: Optional[int] = None) -> List[List[int]]:
+        """
+        Get list of active bin sizes for current epoch.
+
+        Args:
+            epoch: Current epoch number (if None, uses internal counter)
+
+        Returns:
+            active_bins: List of bin sizes that should be used
+        """
+        if epoch is not None:
+            self.current_epoch = epoch
+
+        # After curriculum is complete, use all bins
+        if self.current_epoch >= self.curriculum_epochs:
+            return self.sorted_bin_sizes
+
+        if self.schedule_type == 'linear':
+            # Gradually add bins linearly over time
+            # Start with 1 bin, end with all bins
+            progress = self.current_epoch / self.curriculum_epochs
+            n_active = max(1, int(np.ceil(progress * self.n_bins)))
+            return self.sorted_bin_sizes[:n_active]
+
+        elif self.schedule_type == 'step':
+            # Add bins in discrete steps
+            # Divide curriculum into n_bins equal phases
+            progress = self.current_epoch / self.curriculum_epochs
+            n_active = max(1, int(np.ceil(progress * self.n_bins)))
+            return self.sorted_bin_sizes[:n_active]
+
+        elif self.schedule_type == 'all_at_once':
+            # Use all bins from the start (no curriculum)
+            return self.sorted_bin_sizes
+
+        else:
+            # Default to linear
+            progress = self.current_epoch / self.curriculum_epochs
+            n_active = max(1, int(np.ceil(progress * self.n_bins)))
+            return self.sorted_bin_sizes[:n_active]
+
+    def get_n_active_bins(self, epoch: Optional[int] = None) -> int:
+        """Get number of active bin sizes"""
+        return len(self.get_active_bin_sizes(epoch))
+
+    def increment_epoch(self):
+        """Increment internal epoch counter"""
+        self.current_epoch += 1
+
+    def get_info_dict(self) -> dict:
+        """Get dictionary of bin curriculum info for logging"""
+        active_bins = self.get_active_bin_sizes()
+        return {
+            'bin_curriculum/epoch': self.current_epoch,
+            'bin_curriculum/n_active': len(active_bins),
+            'bin_curriculum/progress': min(1.0, self.current_epoch / self.curriculum_epochs),
+            'bin_curriculum/largest_active': max(b[0] * b[1] * b[2] for b in active_bins) if active_bins else 0
+        }
+
+
 class BoxDifficultyMetrics:
     """
     Metrics for assessing bin packing difficulty.
@@ -118,6 +218,37 @@ class BoxDifficultyMetrics:
         box_vol = box_size[0] * box_size[1] * box_size[2]
         bin_vol = bin_size[0] * bin_size[1] * bin_size[2]
         return box_vol / bin_vol if bin_vol > 0 else 0.0
+
+    @staticmethod
+    def box_to_bin_dimensional_ratio(box_size: Tuple[int, int, int],
+                                      bin_size: Tuple[int, int, int]) -> float:
+        """
+        Compute dimension-aware ratio considering shape compatibility.
+
+        For non-cubic bins, this is better than pure volume ratio.
+        Uses the geometric mean of per-dimension ratios.
+
+        Higher ratio = larger box relative to bin in ALL dimensions = easier
+
+        Args:
+            box_size: (length, width, height) of box
+            bin_size: (length, width, height) of bin
+
+        Returns:
+            ratio: geometric mean of dimensional ratios
+        """
+        if bin_size[0] <= 0 or bin_size[1] <= 0 or bin_size[2] <= 0:
+            return 0.0
+
+        # Per-dimension ratios
+        dim_ratios = [
+            box_size[i] / bin_size[i] for i in range(3)
+        ]
+
+        # Geometric mean (cube root of product)
+        geometric_mean = (dim_ratios[0] * dim_ratios[1] * dim_ratios[2]) ** (1/3)
+
+        return geometric_mean
 
     @staticmethod
     def avg_box_to_bin_ratio(boxes: List[Tuple[int, int, int]],
@@ -201,42 +332,63 @@ class BoxDifficultyMetrics:
 
 
 def difficulty_to_box_size_bias(difficulty: float,
-                                box_size_set: List[Tuple[int, int, int]]) -> np.ndarray:
+                                box_size_set: List[Tuple[int, int, int]],
+                                bin_size: Optional[Tuple[int, int, int]] = None) -> np.ndarray:
     """
     Convert difficulty level to sampling weights for box sizes.
 
-    Easy (difficulty ~0.0): Bias toward large boxes
-    Hard (difficulty ~1.0): Bias toward small boxes or uniform
+    Easy (difficulty ~0.0): Bias toward large boxes RELATIVE TO BIN
+    Hard (difficulty ~1.0): Bias toward small boxes RELATIVE TO BIN or uniform
 
     Args:
         difficulty: Target difficulty [0, 1]
         box_size_set: List of available box sizes
+        bin_size: Container size (optional). If provided, uses box-to-bin ratio for better difficulty control.
 
     Returns:
         weights: Probability weights for each box size (sums to 1)
     """
     n_boxes = len(box_size_set)
-    volumes = np.array([b[0] * b[1] * b[2] for b in box_size_set])
-    max_vol = volumes.max()
-    min_vol = volumes.min()
 
-    # Normalize volumes to [0, 1]
-    if max_vol > min_vol:
-        norm_volumes = (volumes - min_vol) / (max_vol - min_vol)
+    # If bin_size provided, use dimensional ratio (accounts for shape compatibility)
+    if bin_size is not None:
+        # Use dimensional ratio - better for non-cubic bins
+        # This considers how well box dimensions match bin dimensions
+        ratios = np.array([
+            BoxDifficultyMetrics.box_to_bin_dimensional_ratio(box, bin_size)
+            for box in box_size_set
+        ])
+        max_ratio = ratios.max()
+        min_ratio = ratios.min()
+
+        # Normalize ratios to [0, 1]
+        if max_ratio > min_ratio:
+            norm_values = (ratios - min_ratio) / (max_ratio - min_ratio)
+        else:
+            norm_values = np.ones(n_boxes) * 0.5
     else:
-        norm_volumes = np.ones(n_boxes) * 0.5
+        # Fallback: use absolute volumes (original behavior)
+        volumes = np.array([b[0] * b[1] * b[2] for b in box_size_set])
+        max_vol = volumes.max()
+        min_vol = volumes.min()
+
+        # Normalize volumes to [0, 1]
+        if max_vol > min_vol:
+            norm_values = (volumes - min_vol) / (max_vol - min_vol)
+        else:
+            norm_values = np.ones(n_boxes) * 0.5
 
     if difficulty < 0.4:
-        # Easy: Prefer large boxes
-        # Weight proportional to volume
+        # Easy: Prefer large boxes (relative to bin)
+        # Weight proportional to normalized value
         bias_strength = (0.4 - difficulty) / 0.4  # 1.0 at diff=0, 0.0 at diff=0.4
-        weights = 1.0 + bias_strength * norm_volumes
+        weights = 1.0 + bias_strength * norm_values
 
     elif difficulty > 0.6:
-        # Hard: Prefer small boxes
-        # Weight inversely proportional to volume
+        # Hard: Prefer small boxes (relative to bin)
+        # Weight inversely proportional to normalized value
         bias_strength = (difficulty - 0.6) / 0.4  # 0.0 at diff=0.6, 1.0 at diff=1.0
-        weights = 1.0 + bias_strength * (1.0 - norm_volumes)
+        weights = 1.0 + bias_strength * (1.0 - norm_values)
 
     else:
         # Medium: Uniform distribution
